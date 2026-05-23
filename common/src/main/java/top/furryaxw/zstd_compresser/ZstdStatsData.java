@@ -84,7 +84,7 @@ public class ZstdStatsData {
             ringIdx = (ringIdx + 1) % RING;
             if (ringCount < RING) ringCount++;
 
-            if (tabFrames < 3) return "Zstd: initializing...";
+            if (tabFrames < 3) return null;
 
             long avgTxRaw = avg(ringTxRawPerSec);
             long avgTxCmp = avg(ringTxCmpPerSec);

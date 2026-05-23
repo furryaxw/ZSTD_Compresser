@@ -1,21 +1,19 @@
 {
   "required": true,
   "package": "top.furryaxw.zstd_compresser.mixin",
-  "compatibilityLevel": "JAVA_21",
+  "compatibilityLevel": "JAVA_17",
   "minVersion": "0.8",
   "client": [
-    "ClientCommonAccessor",
+    "ClientboundCustomPayloadPacketAccessor",
+    "ClientboundCustomQueryPacketAccessor",
     "ConnectionAccessor",
-    "MixinClientCommonPacketListenerImpl",
-    "MixinClientConfigurationPacketListenerImpl",
     "MixinClientIntentionPacket",
     "MixinConnection",
     "MixinConnectionLogin",
     "MixinGuiHud",
     "MixinKeyboardHandler"
   ],
-  "mixins": [
-  ],
+  "mixins": [],
   "injectors": {
     "defaultRequire": 1
   }

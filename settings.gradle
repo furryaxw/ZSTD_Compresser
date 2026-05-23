@@ -11,4 +11,4 @@ rootProject.name = 'zstd_compresser'
 
 include 'common'
 include 'fabric'
-include 'neoforge'
+include 'forge'

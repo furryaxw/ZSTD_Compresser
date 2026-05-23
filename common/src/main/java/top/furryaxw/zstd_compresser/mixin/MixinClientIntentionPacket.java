@@ -3,18 +3,22 @@ package top.furryaxw.zstd_compresser.mixin;
 import net.minecraft.network.protocol.handshake.ClientIntentionPacket;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.ModifyVariable;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 
 @Mixin(ClientIntentionPacket.class)
 public class MixinClientIntentionPacket {
 
-    @ModifyVariable(
-            method = "<init>(ILjava/lang/String;ILnet/minecraft/network/protocol/handshake/ClientIntent;)V",
-            at = @At("HEAD"),
-            argsOnly = true,
-            ordinal = 0
+    @ModifyArg(
+            method = "write",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/network/FriendlyByteBuf;writeUtf(Ljava/lang/String;)Lnet/minecraft/network/FriendlyByteBuf;"
+            )
     )
-    private static String appendZstdMarker(String hostName) {
-        return hostName + "\0ZSTD\0";
+    private String zstd$appendMarker(String host) {
+        if (!host.contains("\0ZSTD\0")) {
+            return host + "\0ZSTD\0";
+        }
+        return host;
     }
 }

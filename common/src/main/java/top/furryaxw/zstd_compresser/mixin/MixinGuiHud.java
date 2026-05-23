@@ -1,6 +1,5 @@
 package top.furryaxw.zstd_compresser.mixin;
 
-import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.Gui;
@@ -28,7 +27,8 @@ public class MixinGuiHud {
     private String zstd_compresser$lastRxLine;
 
     @Inject(method = "render", at = @At("TAIL"))
-    private void onRender(GuiGraphics guiGraphics, DeltaTracker deltaTracker, CallbackInfo ci) {
+    private void onRender(GuiGraphics guiGraphics, float partialTick, CallbackInfo ci) {
+        if (!"Gui".equals(this.getClass().getSimpleName())) return;
         if (!ZstdConfig.hudEnabledRuntime) return;
         if (Minecraft.getInstance().player == null) return;
 

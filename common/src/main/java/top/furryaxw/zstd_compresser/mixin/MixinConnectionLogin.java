@@ -3,13 +3,13 @@ package top.furryaxw.zstd_compresser.mixin;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPipeline;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundCustomPayloadPacket;
 import net.minecraft.network.protocol.login.ClientboundCustomQueryPacket;
-import net.minecraft.network.protocol.login.ServerboundCustomQueryAnswerPacket;
-import net.minecraft.network.protocol.login.custom.CustomQueryAnswerPayload;
-import net.minecraft.network.protocol.login.custom.CustomQueryPayload;
+import net.minecraft.network.protocol.login.ServerboundCustomQueryPacket;
 import net.minecraft.resources.ResourceLocation;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -18,8 +18,12 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import top.furryaxw.zstd_compresser.DictCache;
+import top.furryaxw.zstd_compresser.ZstdBatchEncoder;
 import top.furryaxw.zstd_compresser.ZstdChannelManager;
+import top.furryaxw.zstd_compresser.ZstdInboundDetector;
 import top.furryaxw.zstd_compresser.Zstd_compresser;
+
+import java.util.zip.CRC32;
 
 @Mixin(Connection.class)
 public class MixinConnectionLogin {
@@ -38,19 +42,30 @@ public class MixinConnectionLogin {
             cancellable = true
     )
     private void onChannelRead0(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
-        if (!(packet instanceof ClientboundCustomQueryPacket(int transactionId, CustomQueryPayload payload))) return;
+        handleLoginNegotiate(packet, ci);
+        handleGameDict(packet, ci);
+    }
 
-        ResourceLocation id = payload.id();
+    @Unique
+    private void handleLoginNegotiate(Packet<?> packet, CallbackInfo ci) {
+        if (!(packet instanceof ClientboundCustomQueryPacket)) return;
+
+        ClientboundCustomQueryPacket query = (ClientboundCustomQueryPacket) packet;
+        ResourceLocation id = ((ClientboundCustomQueryPacketAccessor) query).getIdentifier();
 
         if (!"zstd".equals(id.getNamespace()) || !"negotiate".equals(id.getPath())) return;
 
         ci.cancel();
 
-        FriendlyByteBuf temp = new FriendlyByteBuf(Unpooled.buffer());
-        payload.write(temp);
-        long encoderDictId = temp.readLong();
-        long decoderDictId = temp.readLong();
-        byte flags = temp.readByte();
+        FriendlyByteBuf source = ((ClientboundCustomQueryPacketAccessor) query).getData();
+        int len = source.readableBytes();
+        byte[] raw = new byte[len];
+        source.getBytes(source.readerIndex(), raw);
+        FriendlyByteBuf data = new FriendlyByteBuf(Unpooled.wrappedBuffer(raw));
+
+        long encoderDictId = data.readLong();
+        long decoderDictId = data.readLong();
+        byte flags = data.readByte();
 
         ZstdChannelManager mgr = channel.attr(ZstdChannelManager.KEY).get();
         if (mgr == null) {
@@ -59,18 +74,78 @@ public class MixinConnectionLogin {
         }
         channel.attr(ZstdChannelManager.ZSTD_ENABLED).set(true);
 
-        byte encoderStatus = zstd_compresser$resolveDictEmbedded(mgr, encoderDictId, temp, flags, true);
-        byte decoderStatus = zstd_compresser$resolveDictEmbedded(mgr, decoderDictId, temp, flags, false);
+        byte encoderStatus = zstd_compresser$resolveDictEmbedded(mgr, encoderDictId, data, flags, true);
+        byte decoderStatus = zstd_compresser$resolveDictEmbedded(mgr, decoderDictId, data, flags, false);
 
-        CustomQueryAnswerPayload answer = buf -> {
-            buf.writeByte(encoderStatus);
-            buf.writeByte(decoderStatus);
-        };
-        ServerboundCustomQueryAnswerPacket response = new ServerboundCustomQueryAnswerPacket(transactionId, answer);
+        zstd_compresser$injectZstdPipeline(channel);
+
+        FriendlyByteBuf answerBuf = new FriendlyByteBuf(Unpooled.buffer());
+        answerBuf.writeByte(encoderStatus);
+        answerBuf.writeByte(decoderStatus);
+        ServerboundCustomQueryPacket response = new ServerboundCustomQueryPacket(
+                ((ClientboundCustomQueryPacketAccessor) query).getTransactionId(), answerBuf);
         send(response);
 
         Zstd_compresser.LOGGER.info("[Zstd] LoginPlugin negotiated: encId={} encStatus={} decId={} decStatus={}",
                 encoderDictId, encoderStatus, decoderDictId, decoderStatus);
+    }
+
+    @Unique
+    private void handleGameDict(Packet<?> packet, CallbackInfo ci) {
+        if (channel == null) return;
+        if (!(packet instanceof ClientboundCustomPayloadPacket)) return;
+
+        ClientboundCustomPayloadPacket custom = (ClientboundCustomPayloadPacket) packet;
+        ResourceLocation id = ((ClientboundCustomPayloadPacketAccessor) custom).getIdentifier();
+        if (!"zstd".equals(id.getNamespace()) || !"dict".equals(id.getPath())) {
+            return;
+        }
+
+        ci.cancel();
+
+        Zstd_compresser.LOGGER.info("[Zstd] Processing zstd:dict payload");
+
+        ZstdChannelManager mgr = channel.attr(ZstdChannelManager.KEY).get();
+        if (mgr == null) return;
+
+        try {
+        FriendlyByteBuf source = ((ClientboundCustomPayloadPacketAccessor) custom).getData();
+        int len = source.readableBytes();
+            if (len < 13) return;
+            byte[] raw = new byte[len];
+            source.getBytes(source.readerIndex(), raw);
+            FriendlyByteBuf data = new FriendlyByteBuf(Unpooled.wrappedBuffer(raw));
+
+            long dictId = data.readLong();
+            byte dictType = data.readByte();
+            int expectedCrc = data.readInt();
+            int dictLength = data.readInt();
+            if (dictLength < 0 || dictLength > len - 13) {
+                Zstd_compresser.LOGGER.error("[Zstd] Invalid dict length: {}", dictLength);
+                return;
+            }
+            byte[] dictData = new byte[dictLength];
+            data.readBytes(dictData);
+
+            CRC32 crc = new CRC32();
+            crc.update(dictData);
+            int actualCrc = (int) crc.getValue();
+            if (actualCrc != expectedCrc) {
+                Zstd_compresser.LOGGER.error("[Zstd] Dict CRC mismatch: expected={}, actual={}", expectedCrc, actualCrc);
+                return;
+            }
+
+            DictCache.put(dictId, dictData);
+            if (dictType == 0) {
+                mgr.loadDecoderDict(dictData, dictId);
+                Zstd_compresser.LOGGER.info("[Zstd] Decoder dict loaded, id={}, size={}", dictId, dictLength);
+            } else {
+                mgr.loadEncoderDict(dictData, dictId);
+                Zstd_compresser.LOGGER.info("[Zstd] Encoder dict loaded, id={}, size={}", dictId, dictLength);
+            }
+        } catch (Exception e) {
+            Zstd_compresser.LOGGER.error("[Zstd] Failed to process dictionary", e);
+        }
     }
 
     @Unique
@@ -122,5 +197,40 @@ public class MixinConnectionLogin {
             if (len > 0 && len < 1024 * 1024) temp.skipBytes(len);
         } catch (Exception ignored) {
         }
+    }
+
+    @Unique
+    private void zstd_compresser$injectZstdPipeline(Channel ch) {
+        ChannelPipeline p = ch.pipeline();
+        Zstd_compresser.LOGGER.debug("[Zstd] Injecting Zstd pipeline. Before: {}", p.names());
+
+        boolean replaced = false;
+        for (String name : new String[]{"compress", "compression-encoder"}) {
+            if (p.get(name) != null) {
+                p.replace(name, "zstd_encoder", new ZstdBatchEncoder());
+                Zstd_compresser.LOGGER.debug("[Zstd] Replaced {} with zstd_encoder", name);
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced && p.get("zstd_encoder") == null) {
+            p.addBefore("prepender", "zstd_encoder", new ZstdBatchEncoder());
+            Zstd_compresser.LOGGER.debug("[Zstd] Added zstd_encoder before prepender");
+        }
+
+        if (p.get("zstd_inbound_spy") != null) return;
+        try {
+            if (p.get("splitter") != null) {
+                p.addAfter("splitter", "zstd_inbound_spy", new ZstdInboundDetector());
+            } else if (p.get("timeout") != null) {
+                p.addAfter("timeout", "zstd_inbound_spy", new ZstdInboundDetector());
+            } else {
+                p.addFirst("zstd_inbound_spy", new ZstdInboundDetector());
+            }
+            Zstd_compresser.LOGGER.info("[Zstd] Inbound detector injected");
+        } catch (Exception e) {
+            Zstd_compresser.LOGGER.warn("[Zstd] Failed to inject inbound detector", e);
+        }
+        Zstd_compresser.LOGGER.debug("[Zstd] After inject: {}", p.names());
     }
 }

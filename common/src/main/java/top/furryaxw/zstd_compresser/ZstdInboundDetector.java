@@ -27,10 +27,6 @@ public class ZstdInboundDetector extends ChannelInboundHandlerAdapter {
                     ctx.channel().eventLoop().execute(() -> replaceAndReplay(ctx, buf));
                     return;
                 }
-                if ((len & 0xFF) == 0x28) {
-                    Zstd_compresser.LOGGER.debug("[Zstd] CLIENT Inbound detector: pass len={} firstByte=0x{}",
-                            len, String.format("%02x", buf.getUnsignedByte(buf.readerIndex())));
-                }
             }
         }
         super.channelRead(ctx, msg);

@@ -1,6 +1,6 @@
-# Zstd Compresser - 客户端模组
+_# Zstd Compresser - 客户端模组
 
-Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流量，合并小包，使用 Zstandard (zstd) 压缩，并显示实时压缩统计。
+Minecraft 客户端模组（Architectury 1.20.1），在加密前拦截网络流量，合并小包，使用 Zstandard (zstd) 压缩，并显示实时压缩统计。
 
 ---
 
@@ -22,11 +22,11 @@ Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流
 
 ## 运行要求
 
-- Minecraft 1.21.1
-- Fabric Loader 0.16+ **或** NeoForge 21.1+
+- Minecraft 1.20.1
+- Fabric Loader 0.16+ **或** Forge 47+
 - Fabric API（仅 Fabric）
-- Architectury API 13+
-- Java 21
+- Architectury API 9+
+- Java 17
 
 ---
 
@@ -71,4 +71,4 @@ logging:
 
 ## License
 
-本项目采用 [AGPL-3.0 License](LICENSE.txt) 开源许可。
+本项目采用 [AGPL-3.0 License](LICENSE) 开源许可。

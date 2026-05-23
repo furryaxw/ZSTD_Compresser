@@ -63,14 +63,18 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
             byte[] compressed = new byte[frameLen];
             in.readBytes(compressed);
             long decompressedSize = Zstd.decompressedSize(compressed);
-            if (decompressedSize <= 0 || decompressedSize > MAX_DECOMPRESSED_SIZE) {
+            if (decompressedSize > MAX_DECOMPRESSED_SIZE) {
                 return;
             }
+            if (decompressedSize <= 0) {
+                decompressedSize = MAX_DECOMPRESSED_SIZE;
+            }
             byte[] decompressed = decompressCtx.decompress(compressed, (int) decompressedSize);
+            int actualDecompressed = decompressed.length;
             workBuf = Unpooled.wrappedBuffer(decompressed);
             bytesIn += frameLen;
-            bytesOut += (int) decompressedSize;
-            ZstdStatsData.addRxBatch(frameLen, (int) decompressedSize);
+            bytesOut += actualDecompressed;
+            ZstdStatsData.addRxBatch(frameLen, actualDecompressed);
         } else {
             if (in.getUnsignedByte(in.readerIndex()) == 0) {
                 in.readByte();
