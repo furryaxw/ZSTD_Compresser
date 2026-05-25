@@ -11,7 +11,7 @@ authors = "Furryaxw"
 description = '''
 
 '''
-#logoFile = ""
+logoFile = "pack.png"
 
 [[dependencies.zstd_compresser]]
 modId = "neoforge"
