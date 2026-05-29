@@ -3,7 +3,6 @@ package top.furryaxw.zstd_compresser;
 import com.github.luben.zstd.Zstd;
 import com.github.luben.zstd.ZstdDecompressCtx;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
 
@@ -14,9 +13,7 @@ import java.util.concurrent.TimeUnit;
 public class ZstdBatchDecoder extends ByteToMessageDecoder {
 
     private static final int MAX_DECOMPRESSED_SIZE = 8 * 1024 * 1024;
-    private static final int ZSTD_MAGIC = 0x28B52FFD;
 
-    private ZstdDecompressCtx decompressCtx;
     private volatile boolean ready;
     private ScheduledFuture<?> statsFuture;
 
@@ -24,18 +21,16 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
     private int bytesIn;
     private int bytesOut;
     private int packetsOut;
-    private int rawFrames;
     private ZstdConfig config;
+    private ZstdChannelManager mgr;
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
         super.handlerAdded(ctx);
         config = ZstdConfig.INSTANCE;
-        ZstdChannelManager mgr = ctx.channel().attr(ZstdChannelManager.KEY).get();
-        if (mgr != null) {
-            decompressCtx = mgr.getDecompressCtx();
-            ready = true;
-        }
+        ready = true;
+        mgr = ctx.channel().attr(ZstdChannelManager.KEY).get();
+        if (mgr == null) Zstd_compresser.LOGGER.warn("[Zstd] decoder: ZstdChannelManager not found on channel");
         if (config.statsEnabled) {
             statsFuture = ctx.executor().scheduleAtFixedRate(
                     () -> printStats(), config.statsIntervalSec * 1000L, config.statsIntervalSec * 1000L, TimeUnit.MILLISECONDS);
@@ -43,81 +38,74 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-        if (!ready) {
-            ZstdChannelManager mgr = ctx.channel().attr(ZstdChannelManager.KEY).get();
-            if (mgr != null) {
-                decompressCtx = mgr.getDecompressCtx();
-                ready = true;
-            } else {
-                return;
-            }
-        }
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+        if (!ready) return;
         if (!in.isReadable()) return;
 
-        int frameLen = in.readableBytes();
-        boolean isZstd = frameLen >= 4 && in.getInt(in.readerIndex()) == ZSTD_MAGIC;
+        int dataLength = ZstdChannelManager.tryReadVarInt(in);
+        if (dataLength == -1) return;
+        if (dataLength == -2) return;
 
-        ByteBuf workBuf;
-        if (isZstd) {
-            byte[] compressed = new byte[frameLen];
-            in.readBytes(compressed);
-            long decompressedSize = Zstd.decompressedSize(compressed);
-            if (decompressedSize > MAX_DECOMPRESSED_SIZE) {
-                return;
-            }
-            if (decompressedSize <= 0) {
-                decompressedSize = MAX_DECOMPRESSED_SIZE;
-            }
-            byte[] decompressed = decompressCtx.decompress(compressed, (int) decompressedSize);
-            int actualDecompressed = decompressed.length;
-            workBuf = Unpooled.wrappedBuffer(decompressed);
-            bytesIn += frameLen;
-            bytesOut += actualDecompressed;
-            ZstdStatsData.addRxBatch(frameLen, actualDecompressed);
-        } else {
-            if (in.getUnsignedByte(in.readerIndex()) == 0) {
-                in.readByte();
-            }
-            int dataLen = in.readableBytes();
-            workBuf = in.readRetainedSlice(dataLen);
-            bytesIn += frameLen;
-            bytesOut += dataLen;
-            rawFrames++;
-            ZstdStatsData.addRxBatch(frameLen, dataLen);
+        int remaining = in.readableBytes();
+        if (remaining <= 0) return;
+        if (dataLength == 0) {
+            bytesIn += remaining; bytesOut += remaining;
+            ZstdStatsData.addRxBatch(remaining, remaining);
+            ByteBuf rawData = in.readRetainedSlice(remaining);
+            splitBatch(rawData, out);
+            rawData.release();
+            return;
         }
+        if (dataLength > MAX_DECOMPRESSED_SIZE) return;
 
+        ByteBuf payload = in.readRetainedSlice(remaining);
+        byte[] compressed = new byte[remaining];
+        payload.readBytes(compressed);
+        payload.release();
+        bytesIn += remaining;
+
+        try {
+            byte[] decompressed;
+            ZstdDecompressCtx dctx = mgr != null ? mgr.getDecompressCtx() : null;
+            decompressed = dctx != null ? dctx.decompress(compressed, dataLength)
+                    : Zstd.decompress(compressed, dataLength);
+            ByteBuf workBuf = ctx.alloc().buffer(decompressed.length);
+            workBuf.writeBytes(decompressed);
+            bytesOut += decompressed.length;
+            ZstdStatsData.addRxBatch(remaining, decompressed.length);
+            splitBatch(workBuf, out);
+            workBuf.release();
+        } catch (Exception e) {
+            Zstd_compresser.LOGGER.warn("[Zstd] decompress failed: {}", e.toString());
+        }
+    }
+
+    private void splitBatch(ByteBuf workBuf, List<Object> out) {
         int count = 0;
-        while (workBuf.isReadable()) {
-            int packetLength = ZstdChannelManager.readVarInt(workBuf);
-            if (packetLength <= 0 || packetLength > workBuf.readableBytes()) {
-                break;
-            }
-            out.add(workBuf.readRetainedSlice(packetLength));
+        while (workBuf.readableBytes() >= 1) {
+            int len = ZstdChannelManager.tryReadVarInt(workBuf);
+            if (len < 0 || len == 0 || len > workBuf.readableBytes()) break;
+            out.add(workBuf.readRetainedSlice(len));
             count++;
         }
-        workBuf.release();
-        framesRx++;
-        packetsOut += count;
+        framesRx++; packetsOut += count;
     }
 
     private void printStats() {
         if (framesRx == 0) return;
-        Zstd_compresser.LOGGER.info(
-                "[Zstd] RX: {} frames ({} raw), {}B in, {}B out, {} packets",
-                framesRx, rawFrames, bytesIn, bytesOut, packetsOut);
-        ZstdStatsData.updateRx(framesRx, rawFrames, bytesIn, bytesOut, packetsOut);
-        framesRx = 0;
-        rawFrames = 0;
-        bytesIn = 0;
-        bytesOut = 0;
-        packetsOut = 0;
+        Zstd_compresser.LOGGER.info("[Zstd] RX: {} frames, {}B in, {}B out, {} packets",
+                framesRx, bytesIn, bytesOut, packetsOut);
+        ZstdStatsData.updateRx(framesRx, 0, bytesIn, bytesOut, packetsOut);
+        framesRx = 0; bytesIn = 0; bytesOut = 0; packetsOut = 0;
     }
 
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+    @Override public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         ready = false;
-        if (statsFuture != null) statsFuture.cancel(false);
+        if (statsFuture != null) { statsFuture.cancel(false); statsFuture = null; }
         super.channelInactive(ctx);
+    }
+    @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        ready = false; if (statsFuture != null) statsFuture.cancel(false);
+        ctx.close();
     }
 }

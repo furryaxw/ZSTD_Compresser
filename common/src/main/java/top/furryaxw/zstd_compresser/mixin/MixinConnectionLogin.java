@@ -3,7 +3,6 @@ package top.furryaxw.zstd_compresser.mixin;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelPipeline;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
@@ -18,9 +17,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import top.furryaxw.zstd_compresser.DictCache;
-import top.furryaxw.zstd_compresser.ZstdBatchEncoder;
 import top.furryaxw.zstd_compresser.ZstdChannelManager;
-import top.furryaxw.zstd_compresser.ZstdInboundDetector;
 import top.furryaxw.zstd_compresser.Zstd_compresser;
 
 import java.util.zip.CRC32;
@@ -63,6 +60,13 @@ public class MixinConnectionLogin {
         source.getBytes(source.readerIndex(), raw);
         FriendlyByteBuf data = new FriendlyByteBuf(Unpooled.wrappedBuffer(raw));
 
+        int protocolVersion = data.readInt();
+        if (protocolVersion != ZstdChannelManager.PROTOCOL_VERSION) {
+            Zstd_compresser.LOGGER.error("[Zstd] Protocol version mismatch: server={}, client={}",
+                    protocolVersion, ZstdChannelManager.PROTOCOL_VERSION);
+            return;
+        }
+
         long encoderDictId = data.readLong();
         long decoderDictId = data.readLong();
         byte flags = data.readByte();
@@ -71,13 +75,13 @@ public class MixinConnectionLogin {
         if (mgr == null) {
             mgr = new ZstdChannelManager();
             channel.attr(ZstdChannelManager.KEY).set(mgr);
+            final ZstdChannelManager finalMgr = mgr;
+            channel.closeFuture().addListener(f -> finalMgr.close());
         }
-        channel.attr(ZstdChannelManager.ZSTD_ENABLED).set(true);
+        channel.attr(ZstdChannelManager.ZSTD_STATE).set(ZstdChannelManager.TransportState.NEGOTIATING);
 
         byte encoderStatus = zstd_compresser$resolveDictEmbedded(mgr, encoderDictId, data, flags, true);
         byte decoderStatus = zstd_compresser$resolveDictEmbedded(mgr, decoderDictId, data, flags, false);
-
-        zstd_compresser$injectZstdPipeline(channel);
 
         FriendlyByteBuf answerBuf = new FriendlyByteBuf(Unpooled.buffer());
         answerBuf.writeByte(encoderStatus);
@@ -197,40 +201,5 @@ public class MixinConnectionLogin {
             if (len > 0 && len < 1024 * 1024) temp.skipBytes(len);
         } catch (Exception ignored) {
         }
-    }
-
-    @Unique
-    private void zstd_compresser$injectZstdPipeline(Channel ch) {
-        ChannelPipeline p = ch.pipeline();
-        Zstd_compresser.LOGGER.debug("[Zstd] Injecting Zstd pipeline. Before: {}", p.names());
-
-        boolean replaced = false;
-        for (String name : new String[]{"compress", "compression-encoder"}) {
-            if (p.get(name) != null) {
-                p.replace(name, "zstd_encoder", new ZstdBatchEncoder());
-                Zstd_compresser.LOGGER.debug("[Zstd] Replaced {} with zstd_encoder", name);
-                replaced = true;
-                break;
-            }
-        }
-        if (!replaced && p.get("zstd_encoder") == null) {
-            p.addBefore("prepender", "zstd_encoder", new ZstdBatchEncoder());
-            Zstd_compresser.LOGGER.debug("[Zstd] Added zstd_encoder before prepender");
-        }
-
-        if (p.get("zstd_inbound_spy") != null) return;
-        try {
-            if (p.get("splitter") != null) {
-                p.addAfter("splitter", "zstd_inbound_spy", new ZstdInboundDetector());
-            } else if (p.get("timeout") != null) {
-                p.addAfter("timeout", "zstd_inbound_spy", new ZstdInboundDetector());
-            } else {
-                p.addFirst("zstd_inbound_spy", new ZstdInboundDetector());
-            }
-            Zstd_compresser.LOGGER.info("[Zstd] Inbound detector injected");
-        } catch (Exception e) {
-            Zstd_compresser.LOGGER.warn("[Zstd] Failed to inject inbound detector", e);
-        }
-        Zstd_compresser.LOGGER.debug("[Zstd] After inject: {}", p.names());
     }
 }

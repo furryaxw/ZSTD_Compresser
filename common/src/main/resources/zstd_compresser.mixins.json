@@ -6,7 +6,6 @@
   "client": [
     "ClientboundCustomPayloadPacketAccessor",
     "ClientboundCustomQueryPacketAccessor",
-    "ConnectionAccessor",
     "MixinClientIntentionPacket",
     "MixinConnection",
     "MixinConnectionLogin",
