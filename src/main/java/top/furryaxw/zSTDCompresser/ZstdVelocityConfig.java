@@ -12,11 +12,10 @@ import java.util.Map;
 public class ZstdVelocityConfig {
 
     public static volatile ZstdVelocityConfig INSTANCE = new ZstdVelocityConfig(Map.of());
+    private static Path lastConfigPath;
 
     public final int level;
     public final int windowLog;
-    public final int batchMaxBytes;
-    public final int flushIntervalMs;
     public final int statsIntervalSec;
     public final boolean statsEnabled;
     public final boolean debug;
@@ -35,8 +34,6 @@ public class ZstdVelocityConfig {
         Map<String, Object> c = getMap(map, "compression");
         this.level = getInt(c, "level", 9);
         this.windowLog = getInt(c, "window_log", 25);
-        this.batchMaxBytes = getInt(c, "batch_max_bytes", 65536);
-        this.flushIntervalMs = getInt(c, "flush_interval_ms", 10);
 
         Map<String, Object> t = getMap(map, "trainer");
         this.trainerMaxSamples = getInt(t, "max_samples", 10000);
@@ -56,6 +53,7 @@ public class ZstdVelocityConfig {
     }
 
     public static void load(Path configPath) {
+        lastConfigPath = configPath;
         ZstdVelocityConfig cfg;
         try {
             Map<String, Object> existing = Map.of();
@@ -77,6 +75,10 @@ public class ZstdVelocityConfig {
         INSTANCE = cfg;
     }
 
+    public static void reload() {
+        if (lastConfigPath != null) load(lastConfigPath);
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> deepMerge(Map<String, Object> d, Map<String, Object> e) {
         Map<String, Object> r = new LinkedHashMap<>(d);
@@ -96,8 +98,6 @@ public class ZstdVelocityConfig {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("level", 9);
         c.put("window_log", 25);
-        c.put("batch_max_bytes", 65536);
-        c.put("flush_interval_ms", 10);
 
         Map<String, Object> t = new LinkedHashMap<>();
         t.put("max_samples", 10000);
@@ -136,13 +136,9 @@ public class ZstdVelocityConfig {
                             + "# ── Compression ──\n"
                             + "# level: Zstd compression level (1-22). Higher = better compression but slower.\n"
                             + "# window_log: Sliding window size as 2^N bytes (25 = 32MB).\n"
-                            + "# batch_max_bytes: Max batch accumulator size before forced flush.\n"
-                            + "# flush_interval_ms: Max time window for packet batching.\n"
                             + "compression:\n"
                             + "  level: " + getInt(c, "level", 9) + "\n"
                             + "  window_log: " + getInt(c, "window_log", 25) + "\n"
-                            + "  batch_max_bytes: " + getInt(c, "batch_max_bytes", 65536) + "\n"
-                            + "  flush_interval_ms: " + getInt(c, "flush_interval_ms", 10) + "\n"
                             + "\n"
                             + "# ── Trainer ──\n"
                             + "# max_samples: Sample ring buffer capacity. Triggers training when full.\n"

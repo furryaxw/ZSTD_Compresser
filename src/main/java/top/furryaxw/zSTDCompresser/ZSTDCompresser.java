@@ -4,6 +4,7 @@ import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.ConnectionHandshakeEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.InboundConnection;
@@ -36,7 +37,29 @@ public class ZSTDCompresser {
     public void onProxyInitialization(ProxyInitializeEvent event) {
         ZstdVelocityConfig.load(dataDirectory.resolve("config.yml"));
         ZstdSampleTrainer.init(dataDirectory);
+        if (ZstdVelocityConfig.INSTANCE.debug) {
+            try {
+                Class<?> levelClass = Class.forName("ch.qos.logback.classic.Level");
+                Object debugLevel = levelClass.getField("DEBUG").get(null);
+                Class<?> loggerClass = Class.forName("ch.qos.logback.classic.Logger");
+                Object logbackLogger = org.slf4j.LoggerFactory.getLogger("zstd_velocity");
+                loggerClass.getMethod("setLevel", levelClass).invoke(logbackLogger, debugLevel);
+            } catch (Exception ignored) {
+                logger.warn("[Zstd] Failed to set debug log level via Logback");
+            }
+        }
         logger.info("ZSTD Compresser Velocity plugin initialized");
+        proxy.getCommandManager().register(
+                proxy.getCommandManager().metaBuilder("zstd")
+                        .plugin(this)
+                        .build(),
+                new ZstdCommand(proxy));
+    }
+
+    @Subscribe
+    public void onProxyShutdown(ProxyShutdownEvent event) {
+        ZstdSampleTrainer.shutdown();
+        logger.info("[Zstd] Samples saved on shutdown");
     }
 
     @Subscribe
@@ -57,11 +80,13 @@ public class ZSTDCompresser {
         ZstdChannelManager mgr = new ZstdChannelManager();
         channel.attr(ZstdChannelManager.KEY).set(mgr);
         channel.attr(ZstdChannelManager.ZSTD_ENABLED).set(true);
+        channel.attr(ZstdChannelManager.ZSTD_STATE).set(ZstdChannelManager.TransportState.NEGOTIATING);
+        channel.closeFuture().addListener(f -> mgr.close());
 
         channel.pipeline().addBefore("handler", "zstd_outbound_spy", new ZstdHijacker());
-        channel.pipeline().addAfter("frame-decoder", "zstd_inbound_spy", new ZstdInboundDetector());
 
-        logger.info("[Zstd] Hijacker injected into pipeline: {}", channel);
+        logger.info("[Zstd] Hijacker injected | channel={} remote={} pipeline={}",
+                channel.getClass().getSimpleName(), channel.remoteAddress(), channel.pipeline().names());
     }
 
     private Channel extractChannel(InboundConnection inbound) {

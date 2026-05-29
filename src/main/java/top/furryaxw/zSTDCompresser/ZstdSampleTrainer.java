@@ -10,6 +10,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
@@ -37,6 +40,7 @@ public class ZstdSampleTrainer {
 
     private static volatile ZstdSampleTrainer encoderInstance;
     private static volatile ZstdSampleTrainer decoderInstance;
+    private static ScheduledExecutorService autoSaveExecutor;
 
     public static void init(Path dataDir) {
         Path dir = dataDir.resolve("zstd_dicts");
@@ -51,6 +55,19 @@ public class ZstdSampleTrainer {
         decoderInstance.loadFromDisk();
         LOGGER.info("[Zstd] Trainers initialized. encoderDictId={} decoderDictId={}",
                 encoderInstance.currentDictId, decoderInstance.currentDictId);
+        autoSaveExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "zstd-autosave");
+            t.setDaemon(true);
+            return t;
+        });
+        autoSaveExecutor.scheduleWithFixedDelay(ZstdSampleTrainer::saveAll, 5, 5, TimeUnit.MINUTES);
+    }
+
+    public static void shutdown() {
+        if (autoSaveExecutor != null) {
+            autoSaveExecutor.shutdown();
+        }
+        saveAll();
     }
 
     public static void submitEncoderSample(byte[] packetBytes) {
@@ -95,6 +112,40 @@ public class ZstdSampleTrainer {
 
     public long getCurrentDictId() {
         return currentDictId;
+    }
+
+    public int getSampleCount() {
+        synchronized (this) {
+            return sampleRing.size();
+        }
+    }
+
+    public int getSampleBytes() {
+        return sampleBytes;
+    }
+
+    public long getLastTrainTime() {
+        return lastTrainTime;
+    }
+
+    public static void saveAll() {
+        if (encoderInstance != null) encoderInstance.saveSamples();
+        if (decoderInstance != null) decoderInstance.saveSamples();
+    }
+
+    private void saveSamples() {
+        synchronized (this) {
+            if (sampleRing.isEmpty()) return;
+            try {
+                List<byte[]> all = new ArrayList<>(loadHistory());
+                all.addAll(sampleRing);
+                while (all.size() > maxHistorySamples) all.remove(0);
+                writeSamples(all);
+                LOGGER.debug("[Zstd] {} auto-saved {} samples", name, all.size());
+            } catch (IOException e) {
+                LOGGER.warn("[Zstd] {} auto-save failed", name, e);
+            }
+        }
     }
 
     private void addSample(byte[] packetBytes) {

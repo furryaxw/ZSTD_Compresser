@@ -7,7 +7,7 @@ plugins {
 }
 
 group = 'top.furryaxw'
-version = '0.1.0-Alpha'
+version = '0.2.0-Beta'
 
 repositories {
     mavenCentral()
