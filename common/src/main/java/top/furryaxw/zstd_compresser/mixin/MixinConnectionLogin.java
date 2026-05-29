@@ -39,15 +39,14 @@ public class MixinConnectionLogin {
             cancellable = true
     )
     private void onChannelRead0(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
-        handleLoginNegotiate(packet, ci);
-        handleGameDict(packet, ci);
+        zstd_compresser$handleLoginNegotiate(packet, ci);
+        zstd_compresser$handleGameDict(packet, ci);
     }
 
     @Unique
-    private void handleLoginNegotiate(Packet<?> packet, CallbackInfo ci) {
-        if (!(packet instanceof ClientboundCustomQueryPacket)) return;
+    private void zstd_compresser$handleLoginNegotiate(Packet<?> packet, CallbackInfo ci) {
+        if (!(packet instanceof ClientboundCustomQueryPacket query)) return;
 
-        ClientboundCustomQueryPacket query = (ClientboundCustomQueryPacket) packet;
         ResourceLocation id = ((ClientboundCustomQueryPacketAccessor) query).getIdentifier();
 
         if (!"zstd".equals(id.getNamespace()) || !"negotiate".equals(id.getPath())) return;
@@ -95,11 +94,10 @@ public class MixinConnectionLogin {
     }
 
     @Unique
-    private void handleGameDict(Packet<?> packet, CallbackInfo ci) {
+    private void zstd_compresser$handleGameDict(Packet<?> packet, CallbackInfo ci) {
         if (channel == null) return;
-        if (!(packet instanceof ClientboundCustomPayloadPacket)) return;
+        if (!(packet instanceof ClientboundCustomPayloadPacket custom)) return;
 
-        ClientboundCustomPayloadPacket custom = (ClientboundCustomPayloadPacket) packet;
         ResourceLocation id = ((ClientboundCustomPayloadPacketAccessor) custom).getIdentifier();
         if (!"zstd".equals(id.getNamespace()) || !"dict".equals(id.getPath())) {
             return;
@@ -113,8 +111,8 @@ public class MixinConnectionLogin {
         if (mgr == null) return;
 
         try {
-        FriendlyByteBuf source = ((ClientboundCustomPayloadPacketAccessor) custom).getData();
-        int len = source.readableBytes();
+            FriendlyByteBuf source = ((ClientboundCustomPayloadPacketAccessor) custom).getData();
+            int len = source.readableBytes();
             if (len < 13) return;
             byte[] raw = new byte[len];
             source.getBytes(source.readerIndex(), raw);

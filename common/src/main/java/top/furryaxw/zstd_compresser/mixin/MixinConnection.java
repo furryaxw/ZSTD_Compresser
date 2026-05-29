@@ -59,8 +59,8 @@ public class MixinConnection {
                 p.addLast("zstd_encoder", new ZstdBatchEncoder());
             }
             Zstd_compresser.LOGGER.debug("[Zstd] zstd_encoder installed");
-            }
-            if (p.get("zstd_decoder") == null) {
+        }
+        if (p.get("zstd_decoder") == null) {
             if (p.get("decompress") != null) {
                 p.replace("decompress", "zstd_decoder", new ZstdBatchDecoder());
             } else if (p.get("compression-decoder") != null) {

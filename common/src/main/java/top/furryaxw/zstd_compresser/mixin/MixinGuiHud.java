@@ -25,6 +25,8 @@ public class MixinGuiHud {
     private String zstd_compresser$lastTxLine;
     @Unique
     private String zstd_compresser$lastRxLine;
+    @Unique
+    private String zstd_compresser$lastBatchLine;
 
     @Inject(method = "render", at = @At("TAIL"))
     private void onRender(GuiGraphics guiGraphics, float partialTick, CallbackInfo ci) {
@@ -45,10 +47,8 @@ public class MixinGuiHud {
 
         if (stats != null) {
             String[] parts = stats.split("\\|");
-            String txPart = parts.length > 0 ? parts[0].trim() : "";
-            String rxPart = parts.length > 1 ? parts[1].trim() : "";
-            txLine = "§lTX:§r" + txPart.substring(txPart.indexOf(':') + 1);
-            rxLine = "§lRX:§r" + rxPart.substring(rxPart.indexOf(':') + 1);
+            txLine = parts.length > 0 ? parts[0].trim() : "";
+            rxLine = parts.length > 1 ? parts[1].trim() : "";
 
             if (zstd_compresser$lastTxLine != null) {
                 txLine = zstd_compresser$averageLine(zstd_compresser$lastTxLine, txLine);
@@ -58,26 +58,50 @@ public class MixinGuiHud {
             zstd_compresser$lastRxLine = rxLine;
         }
 
-        zstd_compresser$drawHud(guiGraphics, txLine != null ? txLine : zstd_compresser$lastTxLine,
+        zstd_compresser$lastBatchLine = zstd_compresser$buildBatchLine();
+
+        zstd_compresser$drawHud(guiGraphics,
+                txLine != null ? txLine : zstd_compresser$lastTxLine,
                 rxLine != null ? rxLine : zstd_compresser$lastRxLine);
     }
 
     @Unique
     private void zstd_compresser$drawHud(GuiGraphics g, String tx, String rx) {
-        if (tx == null) return;
+        String batch = zstd_compresser$lastBatchLine;
         Font font = Minecraft.getInstance().font;
-        int x = 4;
-        int y = 4;
-        int lineH = 10;
+        int x = 4, y = 4, lineH = 10;
+        if (tx == null && batch == null) return;
 
-        String raw = rx != null ? zstd_compresser$stripFmt(tx + rx) : zstd_compresser$stripFmt(tx);
-        int maxW = font.width(raw) + 4;
+        int totalLines = (batch != null ? 1 : 0) + (tx != null ? 1 : 0) + (rx != null ? 1 : 0);
+        int w1 = tx != null ? font.width(zstd_compresser$stripFmt(tx)) : 0;
+        int w2 = rx != null ? font.width(zstd_compresser$stripFmt(rx)) : 0;
+        int w3 = batch != null ? font.width(zstd_compresser$stripFmt(batch)) : 0;
+        int maxW = Math.max(Math.max(w1, w2), w3) + 4;
 
-        g.fill(x - 2, y - 2, x + maxW, y + lineH * 2, 0x88000000);
-        g.drawString(font, Component.literal(tx), x, y, 0xFFFFFF);
-        if (rx != null) {
-            g.drawString(font, Component.literal(rx), x, y + lineH, 0xFFFFFF);
+        g.fill(x - 2, y - 2, x + maxW, y + lineH * totalLines, 0x88000000);
+        if (tx != null) {
+            g.drawString(font, Component.literal(tx), x, y, 0xFFFFFF);
+            y += lineH;
         }
+        if (rx != null) {
+            g.drawString(font, Component.literal(rx), x, y, 0xFFFFFF);
+            y += lineH;
+        }
+        if (batch != null) {
+            g.drawString(font, Component.literal(batch), x, y, 0xFFFFFF);
+        }
+    }
+
+    @Unique
+    private static String zstd_compresser$buildBatchLine() {
+        boolean local = ZstdStatsData.batchActive;
+        boolean peer = ZstdStatsData.peerBatchActive;
+        if (!local && !peer) {
+            return "§7§lBATCH:§7 OFF";
+        }
+        String localStr = local ? "§aON" : "§7OFF";
+        String peerStr = peer ? "§aON" : "§7OFF";
+        return "§lBATCH:§r TX " + localStr + " §7|§r RX " + peerStr;
     }
 
     @Unique

@@ -2,6 +2,9 @@ package top.furryaxw.zstd_compresser;
 
 public class ZstdStatsData {
 
+    public static volatile boolean batchActive;
+    public static volatile boolean peerBatchActive;
+
     public static volatile long txRawBytesPerSec;
     public static volatile long txCompressedBytesPerSec;
     public static volatile int txFramesPerSec;
@@ -12,8 +15,6 @@ public class ZstdStatsData {
     public static volatile int rxFramesPerSec;
     public static volatile int rxPacketsPerSec;
     public static volatile int rxRawFramesPerSec;
-
-    public static volatile int statsIntervalSec = 10;
 
     private static long accumTxRaw;
     private static long accumTxCompressed;
