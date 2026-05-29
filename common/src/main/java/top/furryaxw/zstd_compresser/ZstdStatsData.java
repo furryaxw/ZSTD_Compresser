@@ -2,6 +2,9 @@ package top.furryaxw.zstd_compresser;
 
 public class ZstdStatsData {
 
+    public static volatile boolean batchActive;
+    public static volatile boolean peerBatchActive;
+
     public static volatile long txRawBytesPerSec;
     public static volatile long txCompressedBytesPerSec;
     public static volatile int txFramesPerSec;
@@ -84,7 +87,7 @@ public class ZstdStatsData {
             ringIdx = (ringIdx + 1) % RING;
             if (ringCount < RING) ringCount++;
 
-            if (tabFrames < 3) return "Zstd: initializing...";
+            if (tabFrames < 3) return null;
 
             long avgTxRaw = avg(ringTxRawPerSec);
             long avgTxCmp = avg(ringTxCmpPerSec);

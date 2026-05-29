@@ -3,6 +3,7 @@ package top.furryaxw.zstd_compresser.mixin;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.util.AttributeKey;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
@@ -18,6 +19,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import top.furryaxw.zstd_compresser.DictCache;
+import top.furryaxw.zstd_compresser.NeoForgeNegotiateHolder;
 import top.furryaxw.zstd_compresser.ZstdChannelManager;
 import top.furryaxw.zstd_compresser.Zstd_compresser;
 
@@ -48,6 +50,22 @@ public class MixinConnectionLogin {
 
         FriendlyByteBuf temp = new FriendlyByteBuf(Unpooled.buffer());
         payload.write(temp);
+
+        if (temp.readableBytes() < 21) {
+            byte[] raw = NeoForgeNegotiateHolder.CAPTURED_DATA.get();
+            NeoForgeNegotiateHolder.CAPTURED_DATA.remove();
+            if (raw == null) {
+                raw = channel.attr(AttributeKey.<byte[]>valueOf("zstd:negotiate_raw")).getAndSet(null);
+            }
+            if (raw != null) {
+                NeoForgeNegotiateHolder.CAPTURED_DATA.remove();
+                temp.release();
+                temp = new FriendlyByteBuf(Unpooled.wrappedBuffer(raw));
+            } else {
+                Zstd_compresser.LOGGER.warn("[Zstd] negotiate payload too short: {} bytes", temp.readableBytes());
+                return;
+            }
+        }
 
         int protocolVersion = temp.readInt();
         if (protocolVersion != ZstdChannelManager.PROTOCOL_VERSION) {

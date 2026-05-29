@@ -39,7 +39,9 @@ dependencies {
     common(project(path: ':common', configuration: 'namedElements')) { transitive false }
     shadowBundle project(path: ':common', configuration: 'transformProductionNeoForge')
     shadowBundle "com.github.luben:zstd-jni:1.5.5-11"
-    compileOnly "org.yaml:snakeyaml:2.2"
+    shadowBundle "org.yaml:snakeyaml:2.2"
+
+    implementation "org.yaml:snakeyaml:2.2"
 }
 
 processResources {

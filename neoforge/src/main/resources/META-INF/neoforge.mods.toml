@@ -37,3 +37,6 @@ side = "BOTH"
 
 [[mixins]]
 config = "zstd_compresser.mixins.json"
+
+[[mixins]]
+config = "zstd_compresser-neoforge.mixins.json"

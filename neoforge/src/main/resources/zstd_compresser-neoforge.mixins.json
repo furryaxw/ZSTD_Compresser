@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "top.furryaxw.zstd_compresser.neoforge.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "minVersion": "0.8",
+  "client": [
+    "NeoForgeNegotiateCaptureMixin"
+  ],
+  "mixins": [],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

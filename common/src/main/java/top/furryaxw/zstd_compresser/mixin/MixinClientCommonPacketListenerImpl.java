@@ -13,12 +13,11 @@ import net.minecraft.resources.ResourceLocation;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import top.furryaxw.zstd_compresser.DictCache;
-import top.furryaxw.zstd_compresser.ZstdChannelManager;
-import top.furryaxw.zstd_compresser.Zstd_compresser;
+import top.furryaxw.zstd_compresser.*;
 
 import java.util.zip.CRC32;
 
@@ -93,9 +92,23 @@ public class MixinClientCommonPacketListenerImpl {
                 connection.send(ServerboundFinishConfigurationPacket.INSTANCE);
                 mgr.setFinishConfigPending(false);
                 Zstd_compresser.LOGGER.info("[Zstd] Released FinishConfiguration");
+                zstd_compresser$tryActivateBatch(channel);
             }
         } catch (Exception e) {
             Zstd_compresser.LOGGER.error("[Zstd] Failed to process dictionary", e);
         }
+    }
+
+    @Unique
+    private static void zstd_compresser$tryActivateBatch(Channel channel) {
+        ZstdConfig cfg = ZstdConfig.INSTANCE;
+        if (!cfg.allowBatch) return;
+        channel.eventLoop().execute(() -> {
+            ZstdChannelManager.TransportMode current = channel.attr(ZstdChannelManager.ZSTD_MODE).get();
+            if (current == ZstdChannelManager.TransportMode.BATCH) return;
+            channel.attr(ZstdChannelManager.ZSTD_MODE).set(ZstdChannelManager.TransportMode.BATCH);
+            ZstdStatsData.batchActive = true;
+            Zstd_compresser.LOGGER.debug("[Zstd] PLAY phase — switching encoder to BATCH mode");
+        });
     }
 }

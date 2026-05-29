@@ -10,6 +10,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import top.furryaxw.zstd_compresser.ZstdChannelManager;
+import top.furryaxw.zstd_compresser.ZstdConfig;
+import top.furryaxw.zstd_compresser.ZstdStatsData;
 import top.furryaxw.zstd_compresser.Zstd_compresser;
 
 @Mixin(ClientConfigurationPacketListenerImpl.class)
@@ -39,6 +41,22 @@ public class MixinClientConfigurationPacketListenerImpl {
             ci.cancel();
             mgr.setFinishConfigPending(true);
             Zstd_compresser.LOGGER.info("[Zstd] Held FinishConfiguration, waiting dict id={}", expectedDictId);
+            return;
         }
+
+        zstd_compresser$tryActivateBatch(channel);
+    }
+
+    @Unique
+    private static void zstd_compresser$tryActivateBatch(Channel channel) {
+        ZstdConfig cfg = ZstdConfig.INSTANCE;
+        if (!cfg.allowBatch) return;
+        channel.eventLoop().execute(() -> {
+            ZstdChannelManager.TransportMode current = channel.attr(ZstdChannelManager.ZSTD_MODE).get();
+            if (current == ZstdChannelManager.TransportMode.BATCH) return;
+            channel.attr(ZstdChannelManager.ZSTD_MODE).set(ZstdChannelManager.TransportMode.BATCH);
+            ZstdStatsData.batchActive = true;
+            Zstd_compresser.LOGGER.debug("[Zstd] PLAY phase — switching encoder to BATCH mode");
+        });
     }
 }
