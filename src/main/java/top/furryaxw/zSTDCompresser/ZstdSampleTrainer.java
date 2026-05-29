@@ -27,6 +27,8 @@ public class ZstdSampleTrainer {
     private byte[] currentDict;
     private long currentDictId;
     private int sampleBytes;
+    private int lastSavedSampleCount;
+    private int lastSavedSampleBytes;
 
     private final int maxSamples;
     private final int minSamples;
@@ -136,11 +138,14 @@ public class ZstdSampleTrainer {
     private void saveSamples() {
         synchronized (this) {
             if (sampleRing.isEmpty()) return;
+            if (sampleRing.size() == lastSavedSampleCount && sampleBytes == lastSavedSampleBytes) return;
             try {
                 List<byte[]> all = new ArrayList<>(loadHistory());
                 all.addAll(sampleRing);
                 while (all.size() > maxHistorySamples) all.remove(0);
                 writeSamples(all);
+                lastSavedSampleCount = sampleRing.size();
+                lastSavedSampleBytes = sampleBytes;
                 LOGGER.debug("[Zstd] {} auto-saved {} samples", name, all.size());
             } catch (IOException e) {
                 LOGGER.warn("[Zstd] {} auto-save failed", name, e);
@@ -275,6 +280,8 @@ public class ZstdSampleTrainer {
             history.addAll(sampleRing);
             while (history.size() > maxHistorySamples) history.remove(0);
             writeSamples(history);
+            lastSavedSampleCount = sampleRing.size();
+            lastSavedSampleBytes = sampleBytes;
             LOGGER.info("[Zstd] {} persisted dict={} samples={}", name, currentDictId, history.size());
         } catch (IOException e) {
             LOGGER.error("[Zstd] {} persist failed", name, e);
@@ -299,6 +306,8 @@ public class ZstdSampleTrainer {
                 synchronized (this) {
                     sampleRing.addAll(history);
                     for (byte[] s : history) sampleBytes += s.length;
+                    lastSavedSampleCount = sampleRing.size();
+                    lastSavedSampleBytes = sampleBytes;
                 }
                 LOGGER.info("[Zstd] {} loaded {} history samples from disk", name, history.size());
             }

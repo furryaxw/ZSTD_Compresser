@@ -5,6 +5,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.ChannelPromise;
+import io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,6 +16,8 @@ public class ZstdBatchEncoder extends ChannelOutboundHandlerAdapter {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("zstd_velocity");
 
+    private ByteBuf accumulator;
+    private ScheduledFuture<?> flushFuture;
     private ScheduledFuture<?> statsFuture;
     private ZstdCompressCtx compressCtx;
     private ZstdVelocityConfig config;
@@ -30,6 +33,14 @@ public class ZstdBatchEncoder extends ChannelOutboundHandlerAdapter {
         config = ZstdVelocityConfig.INSTANCE;
         ZstdChannelManager mgr = ctx.channel().attr(ZstdChannelManager.KEY).get();
         if (mgr != null) compressCtx = mgr.getCompressCtx();
+
+        ZstdChannelManager.TransportMode mode = ctx.channel().attr(ZstdChannelManager.ZSTD_MODE).get();
+        if (mode == ZstdChannelManager.TransportMode.BATCH) {
+            accumulator = ctx.alloc().directBuffer(config.batchMaxBytes);
+            scheduleFlush(ctx);
+            LOGGER.debug("[Zstd] VELOCITY Encoder started in BATCH mode");
+        }
+
         if (config.statsEnabled) {
             statsFuture = ctx.executor().scheduleAtFixedRate(
                     () -> printStats(), config.statsIntervalSec * 1000L, config.statsIntervalSec * 1000L, TimeUnit.MILLISECONDS);
@@ -39,10 +50,44 @@ public class ZstdBatchEncoder extends ChannelOutboundHandlerAdapter {
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (!(msg instanceof ByteBuf packet)) { ctx.write(msg, promise); return; }
-        try {
-            flushPassthrough(ctx, packet, packet.readableBytes());
-            promise.setSuccess();
-        } finally { io.netty.util.ReferenceCountUtil.release(packet); }
+
+        ZstdChannelManager.TransportMode mode = ctx.channel().attr(ZstdChannelManager.ZSTD_MODE).get();
+        if (mode == ZstdChannelManager.TransportMode.BATCH) {
+            try {
+                int pktSize = packet.readableBytes();
+                int prefixSize = ZstdChannelManager.varIntLength(pktSize);
+                if (accumulator == null) {
+                    accumulator = ctx.alloc().directBuffer(config.batchMaxBytes);
+                    scheduleFlush(ctx);
+                }
+                if (prefixSize + pktSize > accumulator.maxWritableBytes()) {
+                    flushBatch(ctx);
+                    if (prefixSize + pktSize > accumulator.maxWritableBytes()) {
+                        accumulator.ensureWritable(prefixSize + pktSize);
+                    }
+                }
+                ZstdChannelManager.writeVarInt(accumulator, pktSize);
+                accumulator.writeBytes(packet);
+                samplePacket(packet, pktSize);
+                promise.setSuccess();
+            } finally {
+                ReferenceCountUtil.release(packet);
+            }
+        } else {
+            try {
+                flushPassthrough(ctx, packet, packet.readableBytes());
+                promise.setSuccess();
+            } finally { ReferenceCountUtil.release(packet); }
+        }
+    }
+
+    @Override
+    public void flush(ChannelHandlerContext ctx) {
+        ZstdChannelManager.TransportMode mode = ctx.channel().attr(ZstdChannelManager.ZSTD_MODE).get();
+        if (mode == ZstdChannelManager.TransportMode.BATCH) {
+            flushBatch(ctx);
+        }
+        ctx.flush();
     }
 
     private void flushPassthrough(ChannelHandlerContext ctx, ByteBuf packet, int pktSize) {
@@ -77,13 +122,61 @@ public class ZstdBatchEncoder extends ChannelOutboundHandlerAdapter {
         samplePacket(packet, pktSize);
     }
 
-    @Override public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+    private void flushBatch(ChannelHandlerContext ctx) {
+        cancelFlush();
+        if (accumulator == null || accumulator.readableBytes() <= 0 || compressCtx == null) {
+            scheduleFlush(ctx);
+            return;
+        }
+        int rawSize = accumulator.readableBytes();
+        byte[] data = new byte[rawSize];
+        accumulator.readBytes(data);
+        byte[] compressed = compressCtx.compress(data);
+
+        if (compressed.length >= rawSize) {
+            skippedCount++;
+            int payloadLength = ZstdChannelManager.varIntLength(0) + rawSize;
+            ByteBuf frame = ctx.alloc().buffer(5 + payloadLength);
+            ZstdChannelManager.writeVarInt(frame, payloadLength);
+            ZstdChannelManager.writeVarInt(frame, 0);
+            frame.writeBytes(data);
+            ctx.write(frame, ctx.voidPromise());
+            bytesCompressed += rawSize;
+            framesSent++; bytesRaw += rawSize;
+        } else {
+            int innerSize = ZstdChannelManager.varIntLength(rawSize);
+            int payloadLength = innerSize + compressed.length;
+            ByteBuf frame = ctx.alloc().buffer(5 + payloadLength);
+            ZstdChannelManager.writeVarInt(frame, payloadLength);
+            ZstdChannelManager.writeVarInt(frame, rawSize);
+            frame.writeBytes(compressed);
+            ctx.write(frame, ctx.voidPromise());
+            bytesCompressed += compressed.length;
+            framesSent++; bytesRaw += rawSize;
+        }
+        accumulator.clear();
+        scheduleFlush(ctx);
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+        cancelFlush();
         if (statsFuture != null) statsFuture.cancel(false);
+        if (accumulator != null && accumulator.refCnt() > 0) {
+            accumulator.release();
+            accumulator = null;
+        }
         super.handlerRemoved(ctx);
     }
 
-    @Override public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        cancelFlush();
         if (statsFuture != null) statsFuture.cancel(false);
+        if (accumulator != null && accumulator.refCnt() > 0) {
+            accumulator.release();
+            accumulator = null;
+        }
         ctx.fireExceptionCaught(cause);
     }
 
@@ -101,5 +194,20 @@ public class ZstdBatchEncoder extends ChannelOutboundHandlerAdapter {
             packet.getBytes(packet.readerIndex(), sample);
             ZstdSampleTrainer.submitEncoderSample(sample);
         } catch (Exception ignored) {}
+    }
+
+    private void scheduleFlush(ChannelHandlerContext ctx) {
+        cancelFlush();
+        flushFuture = ctx.executor().schedule(() -> {
+            flushBatch(ctx);
+            ctx.flush();
+        }, config.flushIntervalMs, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelFlush() {
+        if (flushFuture != null && !flushFuture.isDone()) {
+            flushFuture.cancel(false);
+            flushFuture = null;
+        }
     }
 }

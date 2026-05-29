@@ -16,6 +16,9 @@ public class ZstdVelocityConfig {
 
     public final int level;
     public final int windowLog;
+    public final boolean allowBatch;
+    public final int batchMaxBytes;
+    public final int flushIntervalMs;
     public final int statsIntervalSec;
     public final boolean statsEnabled;
     public final boolean debug;
@@ -34,6 +37,9 @@ public class ZstdVelocityConfig {
         Map<String, Object> c = getMap(map, "compression");
         this.level = getInt(c, "level", 9);
         this.windowLog = getInt(c, "window_log", 25);
+        this.allowBatch = getBool(c, "allow_batch", true);
+        this.batchMaxBytes = getInt(c, "batch_max_bytes", 65536);
+        this.flushIntervalMs = getInt(c, "flush_interval_ms", 10);
 
         Map<String, Object> t = getMap(map, "trainer");
         this.trainerMaxSamples = getInt(t, "max_samples", 10000);
@@ -98,6 +104,9 @@ public class ZstdVelocityConfig {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("level", 9);
         c.put("window_log", 25);
+        c.put("allow_batch", true);
+        c.put("batch_max_bytes", 65536);
+        c.put("flush_interval_ms", 10);
 
         Map<String, Object> t = new LinkedHashMap<>();
         t.put("max_samples", 10000);
@@ -134,11 +143,17 @@ public class ZstdVelocityConfig {
                             + "# New fields from plugin updates are automatically merged with defaults.\n"
                             + "\n"
                             + "# ── Compression ──\n"
-                            + "# level: Zstd compression level (1-22). Higher = better compression but slower.\n"
+                            +                     "# level: Zstd compression level (1-22). Higher = better compression but slower.\n"
                             + "# window_log: Sliding window size as 2^N bytes (25 = 32MB).\n"
+                            + "# allow_batch: Accumulate small packets into batches before compression.\n"
+                            + "# batch_max_bytes: Max accumulator size before forced flush.\n"
+                            + "# flush_interval_ms: Max time window for packet batching (ms).\n"
                             + "compression:\n"
                             + "  level: " + getInt(c, "level", 9) + "\n"
                             + "  window_log: " + getInt(c, "window_log", 25) + "\n"
+                            + "  allow_batch: " + getBool(c, "allow_batch", true) + "\n"
+                            + "  batch_max_bytes: " + getInt(c, "batch_max_bytes", 65536) + "\n"
+                            + "  flush_interval_ms: " + getInt(c, "flush_interval_ms", 10) + "\n"
                             + "\n"
                             + "# ── Trainer ──\n"
                             + "# max_samples: Sample ring buffer capacity. Triggers training when full.\n"
@@ -203,5 +218,11 @@ public class ZstdVelocityConfig {
         Object o = map.get(key);
         if (o instanceof Boolean) return (Boolean) o;
         return false;
+    }
+
+    private static boolean getBool(Map<String, Object> map, String key, boolean def) {
+        Object o = map.get(key);
+        if (o instanceof Boolean) return (Boolean) o;
+        return def;
     }
 }

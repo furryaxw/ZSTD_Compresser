@@ -22,7 +22,8 @@ public class ZstdChannelManager {
     }
 
     public enum TransportMode {
-        PASSTHROUGH
+        PASSTHROUGH,
+        BATCH
     }
 
     public static final AttributeKey<TransportState> ZSTD_STATE =
@@ -206,6 +207,7 @@ public class ZstdChannelManager {
     }
 
     public static final int MAX_COMPRESSED_FRAME_SIZE = 8 * 1024 * 1024;
+    public static final int BATCH_SIGNAL = 0x7FFFFFFF;
     public static final int PROTOCOL_VERSION = 1;
 
     public static void writeVarInt(ByteBuf buf, int value) {
@@ -245,7 +247,7 @@ public class ZstdChannelManager {
             read++;
             result |= (b & 0x7F) << shift;
             if ((b & 0x80) == 0) {
-                if (result < 0 || result > MAX_COMPRESSED_FRAME_SIZE) {
+                if (result < 0 || (result > MAX_COMPRESSED_FRAME_SIZE && result != BATCH_SIGNAL)) {
                     buf.resetReaderIndex();
                     return -2;
                 }

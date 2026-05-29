@@ -26,6 +26,7 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
     private int packetsOut;
     private ZstdVelocityConfig config;
     private ZstdChannelManager mgr;
+    private boolean firstFrameLogged;
 
     @Override
     public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
@@ -45,25 +46,35 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
         if (!ready) return;
         if (!in.isReadable()) return;
 
+        int savedIdx = in.readerIndex();
         int dataLength = ZstdChannelManager.tryReadVarInt(in);
         if (dataLength == -1) return;
         if (dataLength == -2) return;
+
+        if (dataLength == ZstdChannelManager.BATCH_SIGNAL) {
+            ZstdChannelManager.TransportMode mode = ctx.channel().attr(ZstdChannelManager.ZSTD_MODE).get();
+            if (mode != ZstdChannelManager.TransportMode.BATCH) {
+                ctx.channel().attr(ZstdChannelManager.ZSTD_MODE).set(ZstdChannelManager.TransportMode.BATCH);
+                LOGGER.info("[Zstd] VELOCITY Received BATCH signal from client — activating BATCH encoder");
+            }
+            return;
+        }
 
         int remaining = in.readableBytes();
         if (remaining <= 0) return;
         if (dataLength == 0) {
             bytesIn += remaining; bytesOut += remaining;
             ByteBuf rawData = in.readRetainedSlice(remaining);
-            splitBatch(rawData, out);
+            int count = splitBatch(rawData, out);
             rawData.release();
+            if (count > 1) detectBatch(ctx.channel());
+            zstd_compresser$logFrame(ctx, "raw", count);
             return;
         }
         if (dataLength > MAX_DECOMPRESSED_SIZE) return;
 
-        ByteBuf payload = in.readRetainedSlice(remaining);
         byte[] compressed = new byte[remaining];
-        payload.readBytes(compressed);
-        payload.release();
+        in.getBytes(in.readerIndex(), compressed);
         bytesIn += remaining;
 
         try {
@@ -71,17 +82,25 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
             ZstdDecompressCtx dctx = mgr != null ? mgr.getDecompressCtx() : null;
             decompressed = dctx != null ? dctx.decompress(compressed, dataLength)
                     : Zstd.decompress(compressed, dataLength);
+            in.skipBytes(remaining);
             ByteBuf workBuf = ctx.alloc().buffer(decompressed.length);
             workBuf.writeBytes(decompressed);
             bytesOut += decompressed.length;
-            splitBatch(workBuf, out);
+            int count = splitBatch(workBuf, out);
             workBuf.release();
+            if (count > 1) detectBatch(ctx.channel());
+            zstd_compresser$logFrame(ctx, "zstd", count);
         } catch (Exception e) {
-            LOGGER.warn("[Zstd] VELOCITY decompress failed: {}", e.toString());
+            LOGGER.warn("[Zstd] VELOCITY decompress failed, passing raw: dataLength={} remaining={} error={}",
+                    dataLength, remaining, e.toString());
+            // Restore reader to before VarInt, pass complete frame through
+            in.readerIndex(savedIdx);
+            out.add(in.readRetainedSlice(in.readableBytes()));
+            framesRx++;
         }
     }
 
-    private void splitBatch(ByteBuf workBuf, List<Object> out) {
+    private int splitBatch(ByteBuf workBuf, List<Object> out) {
         int count = 0;
         while (workBuf.readableBytes() >= 1) {
             int len = ZstdChannelManager.tryReadVarInt(workBuf);
@@ -92,6 +111,7 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
             count++;
         }
         framesRx++; packetsOut += count;
+        return count;
     }
 
     private void samplePacket(ByteBuf workBuf, int start, int length) {
@@ -100,6 +120,23 @@ public class ZstdBatchDecoder extends ByteToMessageDecoder {
             workBuf.getBytes(start, sample, 0, length);
             ZstdSampleTrainer.submitDecoderSample(sample);
         } catch (Exception ignored) {}
+    }
+
+    private void detectBatch(io.netty.channel.Channel channel) {
+        ZstdChannelManager.TransportMode mode = channel.attr(ZstdChannelManager.ZSTD_MODE).get();
+        if (mode != ZstdChannelManager.TransportMode.BATCH) {
+            channel.attr(ZstdChannelManager.ZSTD_MODE).set(ZstdChannelManager.TransportMode.BATCH);
+            LOGGER.debug("[Zstd] VELOCITY Decoder detected BATCH mode from client — switching encoder to BATCH");
+        }
+    }
+
+    private void zstd_compresser$logFrame(ChannelHandlerContext ctx, String type, int count) {
+        if (!firstFrameLogged) {
+            firstFrameLogged = true;
+            ZstdChannelManager.TransportMode mode = ctx.channel().attr(ZstdChannelManager.ZSTD_MODE).get();
+            LOGGER.debug("[Zstd] VELOCITY Decoder active: type={} count={} mode={}",
+                    type, count, mode);
+        }
     }
 
     private void printStats() {

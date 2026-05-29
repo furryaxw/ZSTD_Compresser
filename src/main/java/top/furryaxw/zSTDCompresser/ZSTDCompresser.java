@@ -38,15 +38,7 @@ public class ZSTDCompresser {
         ZstdVelocityConfig.load(dataDirectory.resolve("config.yml"));
         ZstdSampleTrainer.init(dataDirectory);
         if (ZstdVelocityConfig.INSTANCE.debug) {
-            try {
-                Class<?> levelClass = Class.forName("ch.qos.logback.classic.Level");
-                Object debugLevel = levelClass.getField("DEBUG").get(null);
-                Class<?> loggerClass = Class.forName("ch.qos.logback.classic.Logger");
-                Object logbackLogger = org.slf4j.LoggerFactory.getLogger("zstd_velocity");
-                loggerClass.getMethod("setLevel", levelClass).invoke(logbackLogger, debugLevel);
-            } catch (Exception ignored) {
-                logger.warn("[Zstd] Failed to set debug log level via Logback");
-            }
+            applyDebugLogLevel();
         }
         logger.info("ZSTD Compresser Velocity plugin initialized");
         proxy.getCommandManager().register(
@@ -87,6 +79,41 @@ public class ZSTDCompresser {
 
         logger.info("[Zstd] Hijacker injected | channel={} remote={} pipeline={}",
                 channel.getClass().getSimpleName(), channel.remoteAddress(), channel.pipeline().names());
+    }
+
+    private void applyDebugLogLevel() {
+        boolean ok = tryLog4j2() || tryLogback();
+        if (ok) {
+            logger.info("[Zstd] Debug logging enabled");
+        } else {
+            logger.warn("[Zstd] Could not set debug log level — configure the logging framework manually");
+        }
+    }
+
+    private boolean tryLog4j2() {
+        try {
+            Class<?> configuratorClass = Class.forName("org.apache.logging.log4j.core.config.Configurator");
+            Class<?> levelClass = Class.forName("org.apache.logging.log4j.Level");
+            Object debugLevel = levelClass.getField("DEBUG").get(null);
+            configuratorClass.getMethod("setLevel", String.class, levelClass)
+                    .invoke(null, "zstd_velocity", debugLevel);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean tryLogback() {
+        try {
+            Class<?> levelClass = Class.forName("ch.qos.logback.classic.Level");
+            Object debugLevel = levelClass.getField("DEBUG").get(null);
+            Class<?> loggerClass = Class.forName("ch.qos.logback.classic.Logger");
+            Object logbackLogger = org.slf4j.LoggerFactory.getLogger("zstd_velocity");
+            loggerClass.getMethod("setLevel", levelClass).invoke(logbackLogger, debugLevel);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private Channel extractChannel(InboundConnection inbound) {
