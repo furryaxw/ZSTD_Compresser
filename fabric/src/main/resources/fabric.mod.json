@@ -8,7 +8,9 @@
     "Furryaxw"
   ],
   "contact": {
-    "homepage": ""
+    "homepage": "https://github.com/furryaxw/ZSTD_Compresser",
+    "sources": "https://github.com/furryaxw/ZSTD_Compresser",
+    "issues": "https://github.com/furryaxw/ZSTD_Compresser/issues"
   },
   "license": "AGPL-3.0",
   "icon": "pack.png",
@@ -30,8 +32,5 @@
     "java": ">=21",
     "architectury": ">=13.0.8",
     "fabric-api": "*"
-  },
-  "suggests": {
-    "another-mod": "*"
   }
 }

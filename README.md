@@ -4,7 +4,7 @@ Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流
 
 ---
 
-## ⚠️ 仅限客户端
+## 注意
 
 **本模组仅用于客户端。请勿安装到服务端。** 服务端压缩由独立的 Velocity 插件 `zstd_velocity` 处理。
 
@@ -12,8 +12,9 @@ Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流
 
 ## 功能
 
-- **小包合并与 Zstd 压缩**：用 Zstandard（压缩等级 9、32MB 滑动窗口）替代原版 Zlib
-- **字典同步**：登录时从 Velocity 代理接收训练好的 zstd 字典
+- **兼容原版**：未安装 Velocity 插件时自动退回原版 Zlib
+- **Zstd 压缩**：Zstandard（压缩等级 9、32MB 滑动窗口）替代原版 Zlib
+- **字典支持**：登录时从 Velocity 代理接收训练好的 zstd 字典（编解码双端）
 - **实时 HUD**：左上角显示 TX/RX 压缩速率（按 F8 开关）
 - **自适应跳过**：Zstd 开销大于收益时自动跳过压缩
 - **全配置化**：YAML 配置文件
@@ -23,7 +24,7 @@ Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流
 ## 运行要求
 
 - Minecraft 1.21.1
-- Fabric Loader 0.16+ **或** NeoForge 21.1+
+- Fabric Loader 0.16+ 或 NeoForge 21.1+
 - Fabric API（仅 Fabric）
 - Architectury API 13+
 - Java 21
@@ -32,7 +33,7 @@ Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流
 
 ## 安装
 
-1. 下载对应平台的 JAR（Fabric: `zstd_compresser-fabric-<version>.jar` / NeoForge: `zstd_compresser-neoforge-<version>.jar`）
+1. 下载对应平台的 JAR（Fabric / NeoForge）
 2. 放入 `mods/` 目录
 3. 启动游戏 —— 首次运行自动生成 `config/zstd_compresser.yml`
 4. 游戏内按 **F8** 切换压缩 HUD 显示
@@ -43,18 +44,16 @@ Minecraft 客户端模组（Architectury 1.21.1），在加密前拦截网络流
 
 ```yaml
 compression:
-  level: 9
-  window_log: 25
-  batch_max_bytes: 65536
-  flush_interval_ms: 10
+  level: 9               # Zstd 压缩等级 (1-22)
+  window_log: 25          # 滑动窗口 2^N 字节 (25 = 32MB)
 
 display:
-  hud_enabled: false    # HUD 开关（F8 运行时切换）
+  hud_enabled: false      # HUD 开关（F8 运行时切换）
 
 logging:
-  stats_enabled: false
-  stats_interval_sec: 10
-  debug: false
+  stats_enabled: false    # TX/RX 统计日志
+  stats_interval_sec: 10  # 统计输出间隔 (秒)
+  debug: false            # 调试日志（管道详情、参数）
 ```
 
 ---

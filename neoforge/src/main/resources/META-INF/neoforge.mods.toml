@@ -1,12 +1,13 @@
 modLoader = "javafml"
 loaderVersion = "[2,)"
-#issueTrackerURL = ""
+issueTrackerURL = "https://github.com/furryaxw/ZSTD_Compresser/issues"
 license = "GNU AGPL 3.0"
 
 [[mods]]
 modId = "zstd_compresser"
 version = "${version}"
 displayName = "ZSTD Compresser"
+displayURL = "https://github.com/furryaxw/ZSTD_Compresser"
 authors = "Furryaxw"
 description = '''
 

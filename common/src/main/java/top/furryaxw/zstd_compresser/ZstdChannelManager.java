@@ -11,6 +11,20 @@ import io.netty.util.AttributeKey;
 
 public class ZstdChannelManager {
 
+    public enum TransportState {
+        PLAIN,
+        NEGOTIATING,
+        ZSTD_ACTIVE
+    }
+
+    public enum TransportMode {
+        PASSTHROUGH
+    }
+
+    public static final AttributeKey<TransportState> ZSTD_STATE =
+            AttributeKey.valueOf("zstd:state");
+    public static final AttributeKey<TransportMode> ZSTD_MODE =
+            AttributeKey.valueOf("zstd:mode");
     public static final AttributeKey<Boolean> ZSTD_ENABLED =
             AttributeKey.valueOf("zstd:enabled");
     public static final AttributeKey<ZstdChannelManager> KEY =
@@ -26,6 +40,8 @@ public class ZstdChannelManager {
     private boolean finishConfigPending;
     private boolean decoderInstalled;
     private boolean encoderInstalled;
+    private byte[] compressScratch = new byte[65536];
+    private byte[] decompressScratch = new byte[65536];
 
     public ZstdChannelManager() {
         ZstdConfig cfg = ZstdConfig.INSTANCE;
@@ -97,13 +113,29 @@ public class ZstdChannelManager {
         return encoderInstalled;
     }
 
+    public byte[] getCompressScratch(int minSize) {
+        if (compressScratch.length < minSize) {
+            compressScratch = new byte[minSize];
+        }
+        return compressScratch;
+    }
+
+    public byte[] getDecompressScratch(int minSize) {
+        if (decompressScratch.length < minSize) {
+            decompressScratch = new byte[minSize];
+        }
+        return decompressScratch;
+    }
+
     public void installEncoder(Channel channel) {
         if (channel == null || encoderInstalled) return;
         ChannelPipeline p = channel.pipeline();
         if (p.get("zstd_encoder") != null) return;
 
-        if (p.get("prepender") != null) {
-            p.addAfter("prepender", "zstd_encoder", new ZstdBatchEncoder());
+        if (p.get("compress") != null) {
+            p.replace("compress", "zstd_encoder", new ZstdBatchEncoder());
+        } else if (p.get("compression-encoder") != null) {
+            p.replace("compression-encoder", "zstd_encoder", new ZstdBatchEncoder());
         } else if (p.get("encoder") != null) {
             p.addBefore("encoder", "zstd_encoder", new ZstdBatchEncoder());
         } else {
@@ -142,6 +174,9 @@ public class ZstdChannelManager {
         buf.writeByte(value & 0x7F);
     }
 
+    public static final int MAX_COMPRESSED_FRAME_SIZE = 8 * 1024 * 1024;
+    public static final int PROTOCOL_VERSION = 1;
+
     public static int readVarInt(ByteBuf buf) {
         int result = 0;
         int shift = 0;
@@ -155,6 +190,70 @@ public class ZstdChannelManager {
             }
         } while ((b & 0x80) != 0);
         return result;
+    }
+
+    public static int tryReadVarInt(ByteBuf buf) {
+        buf.markReaderIndex();
+        int result = 0;
+        int shift = 0;
+        int read = 0;
+        while (read < 5) {
+            if (!buf.isReadable()) {
+                buf.resetReaderIndex();
+                return -1;
+            }
+            byte b = buf.readByte();
+            read++;
+            result |= (b & 0x7F) << shift;
+            if ((b & 0x80) == 0) {
+                if (result < 0 || result > MAX_COMPRESSED_FRAME_SIZE) {
+                    buf.resetReaderIndex();
+                    return -2;
+                }
+                return result;
+            }
+            shift += 7;
+            if (shift > 35) {
+                buf.resetReaderIndex();
+                return -2;
+            }
+        }
+        buf.resetReaderIndex();
+        return -2;
+    }
+
+    public static int tryReadFrameLength(ByteBuf buf) {
+        buf.markReaderIndex();
+        int value = 0;
+        int shift = 0;
+        int read = 0;
+        while (read < 5) {
+            if (!buf.isReadable()) {
+                buf.resetReaderIndex();
+                return -1;
+            }
+            byte b = buf.readByte();
+            read++;
+            value |= (b & 0x7F) << shift;
+            if ((b & 0x80) == 0) {
+                if (value < 0 || value > MAX_COMPRESSED_FRAME_SIZE) {
+                    buf.resetReaderIndex();
+                    return -2;
+                }
+                if (buf.readableBytes() < value) {
+                    buf.resetReaderIndex();
+                    return -1;
+                }
+                return value;
+            }
+            shift += 7;
+            if (shift > 35) {
+                buf.resetReaderIndex();
+                return -2;
+            }
+        }
+        buf.resetReaderIndex();
+        return -2;
     }
 
     public static int varIntLength(int value) {

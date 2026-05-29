@@ -48,6 +48,14 @@ public class MixinConnectionLogin {
 
         FriendlyByteBuf temp = new FriendlyByteBuf(Unpooled.buffer());
         payload.write(temp);
+
+        int protocolVersion = temp.readInt();
+        if (protocolVersion != ZstdChannelManager.PROTOCOL_VERSION) {
+            Zstd_compresser.LOGGER.error("[Zstd] Protocol version mismatch: server={}, client={}",
+                    protocolVersion, ZstdChannelManager.PROTOCOL_VERSION);
+            return;
+        }
+
         long encoderDictId = temp.readLong();
         long decoderDictId = temp.readLong();
         byte flags = temp.readByte();
@@ -56,8 +64,10 @@ public class MixinConnectionLogin {
         if (mgr == null) {
             mgr = new ZstdChannelManager();
             channel.attr(ZstdChannelManager.KEY).set(mgr);
+            final ZstdChannelManager finalMgr = mgr;
+            channel.closeFuture().addListener(f -> finalMgr.close());
         }
-        channel.attr(ZstdChannelManager.ZSTD_ENABLED).set(true);
+        channel.attr(ZstdChannelManager.ZSTD_STATE).set(ZstdChannelManager.TransportState.NEGOTIATING);
 
         byte encoderStatus = zstd_compresser$resolveDictEmbedded(mgr, encoderDictId, temp, flags, true);
         byte decoderStatus = zstd_compresser$resolveDictEmbedded(mgr, decoderDictId, temp, flags, false);
